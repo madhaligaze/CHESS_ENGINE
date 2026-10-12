@@ -2,3 +2,7 @@ game 1: Human vs Engine 0-1 | Human +0 =0 -1 score 0.000 Elo -1200
 game 2: Engine vs Human 1-0 | Human +0 =0 -2 score 0.000 Elo -1200
 game 3: Human vs Engine 0-1 | Human +0 =0 -3 score 0.000 Elo -1200
 game 4: Engine vs Human 0-1 | Human +1 =0 -3 score 0.250 Elo -191
+game 5: Human vs Engine 1/2-1/2 | Human +1 =1 -3 score 0.300 Elo -147
+game 6: Engine vs Human 1-0 | Human +1 =1 -4 score 0.250 Elo -191
+game 7: Human vs Engine 1/2-1/2 | Human +1 =2 -4 score 0.286 Elo -159
+game 8: Engine vs Human 1-0 | Human +1 =2 -5 score 0.250 Elo -191
