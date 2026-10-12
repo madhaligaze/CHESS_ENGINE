@@ -9,7 +9,10 @@ __pycache__/
 /nets/*.log
 /nets/*.err
 /nets/*.pgn
+/nets/*.txt
+/nets/*.out
 /nets/test.*
+/nets/humaneval/
 /training/.venv-dml/
 .claude/
 CLAUDE.md
