@@ -3,9 +3,9 @@
 //! late move reductions/pruning, SEE pruning, killer/counter/history move ordering and a
 //! quiescence search.
 //!
-//! The root is special: moves marked as *candidates* (the ones a human would consider, from
-//! the neural network) are searched with a window wide enough to get their exact score, so
-//! the human-like move choice afterwards compares honest numbers at full depth.
+//! After the search, `verify_root_moves` gives exact scores to a few chosen root moves (the
+//! ones a human would consider, from the neural network), so the human-like move choice
+//! compares honest numbers without slowing down the main search.
 
 use crate::board::Board;
 use crate::eval::{evaluate, EvalParams};
@@ -76,12 +76,8 @@ pub struct SearchParams {
     pub soft_ms: Option<u64>,
     /// Abort the search after this many milliseconds.
     pub hard_ms: Option<u64>,
-    /// Network move probabilities for the root moves.
+    /// Network move probabilities for the root moves (used for move ordering and reporting).
     pub priors: Vec<(Move, f32)>,
-    /// Root moves that need exact scores.
-    pub candidates: Vec<Move>,
-    /// How far below the best score a candidate is still scored exactly.
-    pub candidate_margin: i32,
     pub verbose: bool,
     /// First iteration depth (helper threads start at different depths).
     pub start_depth: i32,
@@ -129,7 +125,6 @@ pub struct Searcher {
     hard_ms: Option<u64>,
     node_limit: u64,
     stopped: bool,
-    candidate_margin: i32,
 }
 
 #[inline]
@@ -197,7 +192,6 @@ impl Searcher {
             hard_ms: None,
             node_limit: 0,
             stopped: false,
-            candidate_margin: 150,
         }
     }
 
@@ -672,21 +666,16 @@ impl Searcher {
         self.pv_len[0] = 0;
         let mut best = -INF;
         for i in 0..self.root_moves.len() {
-            let RootMove { mv: m, candidate, .. } = self.root_moves[i];
+            let m = self.root_moves[i].mv;
             let child = b.make_move(m);
             self.stack[OFF].mv = m;
             self.stack[OFF].piece = b.stm * 6 + b.piece_on(m.from());
             self.hashes.push(child.hash);
-            let lo;
+            let lo = alpha;
             let mut s;
             if i == 0 {
-                lo = alpha;
                 s = -self.negamax(&child, -beta, -alpha, depth - 1, 1, false);
-            } else if candidate {
-                lo = (alpha - self.candidate_margin).max(-INF + 1);
-                s = -self.negamax(&child, -beta, -lo, depth - 1, 1, false);
             } else {
-                lo = alpha;
                 s = -self.negamax(&child, -alpha - 1, -alpha, depth - 1, 1, true);
                 if s > alpha && s < beta {
                     s = -self.negamax(&child, -beta, -alpha, depth - 1, 1, false);
@@ -719,6 +708,34 @@ impl Searcher {
         best
     }
 
+    /// After `search`: exact scores for some root moves. Each move is searched to `depth`
+    /// with the window (floor, ceil); the result is None when it scored <= its floor or there
+    /// was no time left, and scores >= ceil come back as ceil. Uses the search's deadline.
+    pub fn verify_root_moves(&mut self, root: &Board, game_hashes: &[u64], moves: &[(Move, i32)], ceil: i32, depth: i32) -> Vec<Option<i32>> {
+        self.stopped = false;
+        self.node_limit = 0;
+        self.hashes.clear();
+        self.hashes.extend_from_slice(game_hashes);
+        if self.hashes.last() != Some(&root.hash) {
+            self.hashes.push(root.hash);
+        }
+        let mut out = Vec::with_capacity(moves.len());
+        for &(m, floor) in moves {
+            if self.stopped || floor >= ceil {
+                out.push(None);
+                continue;
+            }
+            let child = root.make_move(m);
+            self.stack[OFF].mv = m;
+            self.stack[OFF].piece = root.stm * 6 + root.piece_on(m.from());
+            self.hashes.push(child.hash);
+            let s = -self.negamax(&child, -ceil, -floor, depth - 1, 1, false);
+            self.hashes.pop();
+            out.push(if self.stopped || s <= floor { None } else { Some(s.min(ceil)) });
+        }
+        out
+    }
+
     pub fn search(&mut self, root: &Board, game_hashes: &[u64], p: &SearchParams) -> SearchResult {
         self.start = Instant::now();
         self.stopped = false;
@@ -726,7 +743,6 @@ impl Searcher {
         self.seldepth = 0;
         self.hard_ms = p.hard_ms;
         self.node_limit = p.nodes.unwrap_or(0);
-        self.candidate_margin = p.candidate_margin;
         self.hashes.clear();
         self.hashes.extend_from_slice(game_hashes);
         if self.hashes.last() != Some(&root.hash) {
@@ -751,7 +767,7 @@ impl Searcher {
                 exact: false,
                 depth: 0,
                 prior: prior_of(m),
-                candidate: p.candidates.contains(&m),
+                candidate: false,
             })
             .collect();
         // Initial order: hash move, then human prior, then captures.
@@ -940,6 +956,11 @@ impl SearchPool {
             r
         })
     }
+
+    /// See `Searcher::verify_root_moves` (runs on the main thread).
+    pub fn verify_root_moves(&mut self, root: &Board, game_hashes: &[u64], moves: &[(Move, i32)], ceil: i32, depth: i32) -> Vec<Option<i32>> {
+        self.main.verify_root_moves(root, game_hashes, moves, ceil, depth)
+    }
 }
 
 #[cfg(test)]
@@ -949,7 +970,7 @@ mod tests {
     fn search_fen(fen: &str, depth: i32) -> SearchResult {
         let b = Board::from_fen(fen).unwrap();
         let mut s = Searcher::standalone(16);
-        s.search(&b, &[b.hash], &SearchParams { depth: Some(depth), candidate_margin: 150, ..Default::default() })
+        s.search(&b, &[b.hash], &SearchParams { depth: Some(depth), ..Default::default() })
     }
 
     #[test]

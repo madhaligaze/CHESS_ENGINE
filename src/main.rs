@@ -125,7 +125,7 @@ fn bench(depth: i32) {
     for fen in BENCH_FENS {
         let b = Board::from_fen(fen).unwrap();
         s.clear();
-        let r = s.search(&b, &[b.hash], &SearchParams { depth: Some(depth), candidate_margin: 150, ..Default::default() });
+        let r = s.search(&b, &[b.hash], &SearchParams { depth: Some(depth), ..Default::default() });
         println!("{:>10} nodes  d{} {:>8} {:<6} {fen}", r.nodes, r.depth, magician::search::uci_score(r.score), r.best.to_uci());
         nodes += r.nodes;
     }

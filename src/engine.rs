@@ -259,6 +259,71 @@ pub struct Decision {
     pub explanation: String,
 }
 
+/// Probabilities below this count as this: the network is not calibrated that far out.
+const PRIOR_FLOOR: f32 = 0.002;
+
+/// Weight of ln(human probability) against expected score in the utility.
+fn humanity_beta(opts: &Options) -> f64 {
+    opts.humanity as f64 / 100.0 * 0.05
+}
+
+/// Sampling temperature over utilities (0 = always the best utility).
+fn variety_tau(opts: &Options) -> f64 {
+    opts.variety as f64 / 100.0 * 0.02
+}
+
+/// Inverse of `expected_score`.
+fn score_for_expected(es: f64) -> i32 {
+    (-170.0 * (1.0 / es - 1.0).ln()).round() as i32
+}
+
+/// Utility of a root move: how good it is plus how human it is.
+fn utility(r: &RootMove, beta: f64) -> f64 {
+    expected_score(r.score) + beta * (r.prior.max(PRIOR_FLOOR) as f64).ln()
+}
+
+/// After the main search: exact scores for the human candidates that could still win the
+/// choice. A candidate is only worth searching if humans prefer it to the engine's move, and
+/// it only needs to be searched down to the score at which its utility would lose anyway.
+fn verify_human_candidates(pool: &mut SearchPool, game: &Game, result: &mut SearchResult, net: &NetEval, opts: &Options) {
+    let Some(&best) = result.root_moves.first() else { return };
+    if result.depth < 2 || best.score.abs() >= MATE_BOUND || opts.humanity == 0 {
+        return;
+    }
+    let (beta, tau) = (humanity_beta(opts), variety_tau(opts));
+    let p_best = best.prior.max(PRIOR_FLOOR) as f64;
+    let mut checks = Vec::new();
+    for m in candidate_moves(net) {
+        let p = net.prob(m).max(PRIOR_FLOOR) as f64;
+        if m == best.mv || p <= p_best {
+            continue;
+        }
+        // Lowest score at which the candidate's utility still reaches the best move's
+        // (minus a little slack so sampling can pick near-equal moves).
+        let need = expected_score(best.score) - beta * (p.ln() - p_best.ln()) - 2.0 * tau;
+        let threshold = if need <= 0.0 { i32::MIN / 2 } else { score_for_expected(need.min(0.999_999)) };
+        let floor = threshold.max(best.score - opts.max_loss) - 1;
+        if floor < best.score {
+            checks.push((m, floor));
+        }
+    }
+    if checks.is_empty() {
+        return;
+    }
+    let depth = (result.depth - 1).max(1);
+    let scores = pool.verify_root_moves(&game.board, &game.hashes, &checks, best.score + 1, depth);
+    for (&(m, _), s) in checks.iter().zip(scores) {
+        if let Some(rm) = result.root_moves.iter_mut().find(|r| r.mv == m) {
+            rm.candidate = true;
+            rm.exact = s.is_some();
+            if let Some(v) = s {
+                rm.score = v;
+                rm.depth = depth;
+            }
+        }
+    }
+}
+
 /// KL-regularised choice among the root moves of a finished search.
 pub fn choose(result: &SearchResult, opts: &Options, rng: &mut u64) -> Decision {
     let Some(&best) = result.root_moves.first() else {
@@ -267,20 +332,19 @@ pub fn choose(result: &SearchResult, opts: &Options, rng: &mut u64) -> Decision 
     if result.depth == 0 || best.score.abs() >= MATE_BOUND || opts.humanity == 0 {
         return Decision { mv: best.mv, explanation: "engine move (forced, mate or humanity 0)".into() };
     }
-    let beta = opts.humanity as f64 / 100.0 * 0.05;
+    let beta = humanity_beta(opts);
     let floor = best.score - opts.max_loss;
-    let utility = |r: &RootMove| expected_score(r.score) + beta * (r.prior.max(0.002) as f64).ln();
     let options: Vec<(RootMove, f64)> = result
         .root_moves
         .iter()
         .filter(|r| r.mv == best.mv || (r.candidate && r.exact && r.score >= floor))
-        .map(|r| (*r, utility(r)))
+        .map(|r| (*r, utility(r, beta)))
         .collect();
     let max_u = options.iter().map(|o| o.1).fold(f64::MIN, f64::max);
     let chosen = if opts.variety == 0 {
         options.iter().find(|o| o.1 == max_u).unwrap().0
     } else {
-        let tau = opts.variety as f64 / 100.0 * 0.02;
+        let tau = variety_tau(opts);
         let weights: Vec<f64> = options.iter().map(|o| ((o.1 - max_u) / tau).exp()).collect();
         let total: f64 = weights.iter().sum();
         let mut x = next_rand(rng) * total;
@@ -317,26 +381,26 @@ pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options
     let (last, prev) = game.last_moves();
     let net_eval = net.map(|n| n.evaluate(&game.board, last, prev));
 
+    let human = net_eval.is_some() && style != StyleKind::Engine && opts.humanity > 0;
     let (mut soft, hard) = time_budget(limits, game.board.stm, opts.move_overhead);
     let mut params = SearchParams {
         depth: limits.depth,
         nodes: limits.nodes,
         soft_ms: soft,
         hard_ms: hard,
-        candidate_margin: (opts.max_loss + 60).max(100),
         verbose: !opts.quiet,
         ..Default::default()
     };
     if let Some(ne) = &net_eval {
         params.priors = ne.policy.clone();
-        params.candidates = candidate_moves(ne);
         if opts.human_timing && limits.movetime.is_none() {
             if let Some(s) = soft {
                 let f = complexity_factor(ne, game);
                 soft = Some(((s as f64 * f) as u64).max(1));
-                params.soft_ms = soft;
             }
         }
+        // Leave a quarter of the time for checking the human candidates afterwards.
+        params.soft_ms = if human { soft.map(|s| (s * 3 / 4).max(1)) } else { soft };
         let top: Vec<String> = ne.policy.iter().take(5).map(|(m, p)| format!("{m} {:.0}%", p * 100.0)).collect();
         if !opts.quiet {
             println!(
@@ -355,8 +419,9 @@ pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options
         params.depth = Some(1);
     }
 
-    let result = pool.search(&game.board, &game.hashes, &params);
-    let mv = if net_eval.is_some() && style != StyleKind::Engine {
+    let mut result = pool.search(&game.board, &game.hashes, &params);
+    let mv = if let (true, Some(ne)) = (human, &net_eval) {
+        verify_human_candidates(pool, game, &mut result, ne, opts);
         let mut rng = seed | 1;
         let d = choose(&result, opts, &mut rng);
         if !d.explanation.is_empty() && !opts.quiet {
