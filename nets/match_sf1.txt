@@ -1,0 +1,4 @@
+game 1: Magician-Engine vs SF19-2600 1-0 | Magician-Engine +1 =0 -0 score 1.000 Elo +1200
+game 2: SF19-2600 vs Magician-Engine 0-1 | Magician-Engine +2 =0 -0 score 1.000 Elo +1200
+game 3: Magician-Engine vs SF19-2600 1-0 | Magician-Engine +3 =0 -0 score 1.000 Elo +1200
+game 4: SF19-2600 vs Magician-Engine 1/2-1/2 | Magician-Engine +3 =1 -0 score 0.875 Elo +338

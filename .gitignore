@@ -1,0 +1,16 @@
+/target/
+/data/
+/tools/stockfish/
+/training/.venv/
+__pycache__/
+# Training checkpoints, logs and scratch files; the exported *.nn networks are kept.
+/nets/*.pt
+/nets/*.tmp
+/nets/*.log
+/nets/*.err
+/nets/*.pgn
+/nets/test.*
+/training/.venv-dml/
+.claude/
+CLAUDE.md
+CLAUDE.local.md

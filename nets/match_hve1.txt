@@ -1,0 +1,4 @@
+game 1: Human vs Engine 0-1 | Human +0 =0 -1 score 0.000 Elo -1200
+game 2: Engine vs Human 1-0 | Human +0 =0 -2 score 0.000 Elo -1200
+game 3: Human vs Engine 0-1 | Human +0 =0 -3 score 0.000 Elo -1200
+game 4: Engine vs Human 0-1 | Human +1 =0 -3 score 0.250 Elo -191

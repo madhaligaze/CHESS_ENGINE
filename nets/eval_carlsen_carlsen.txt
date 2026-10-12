@@ -1,0 +1,18 @@
+﻿style Carlsen, network carlsen, humanity 50, variety 0, max loss 60
+magician.exe :   100 positions, chosen 53.0%, engine 50.0%, net 41.0% (11s)
+C:\Users\user\Documents\CHESS_ENGINE\scripts\after_base.ps1:41 знак:5
++     & $exe humaneval --player $player --style $style --sample $sample ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  100 positions...net 41.0% (11s):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  200 positions, chosen 55.0%, engine 53.0%, net 42.0% (22s)
+  300 positions, chosen 53.0%, engine 50.0%, net 44.3% (32s)
+  400 positions, chosen 52.8%, engine 50.2%, net 43.0% (42s)
+  500 positions, chosen 55.8%, engine 50.4%, net 44.2% (53s)
+  600 positions, chosen 55.3%, engine 48.7%, net 43.2% (63s)
+positions: 600
+network top-1 matches human: 43.2%  (top-3: 71.7%)
+pure engine best matches human: 48.7%
+engine in this mode matches human: 55.3%
+chosen differs from engine best in 33.7% of moves; average cost 4.5 cp
