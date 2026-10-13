@@ -22,6 +22,8 @@ CLAUDE.local.md
 /games/
 /learn.txt
 /dist/
-/tools/chesscom/.test-profile/
+# Browser profiles of the Playwright tests: Edge signs them in to the Windows Microsoft account
+# and syncs its data (name, email, phone, history), so none of them may be committed.
+/tools/chesscom/.test-*/
 /tools/chesscom/test-screens/
 /app/
