@@ -433,9 +433,22 @@ fn bridge_observe(app: &Arc<App>, req: &Request) -> String {
     let style = req.q("style").and_then(StyleKind::parse).unwrap_or(StyleKind::Human);
     let opponent = req.q("opponent").filter(|o| !o.is_empty()).unwrap_or("бот Chess.com").to_string();
     let mut br = app.bridge.lock().unwrap();
-    let start = Board::startpos();
-    let at_start = shown == placement(&start);
-    if at_start && (br.log.is_none() || !br.game.moves.is_empty() || br.our != our) {
+    let startpos = Board::startpos();
+    let at_start = shown == placement(&startpos);
+    // Pressing the button after the game has begun: start recording from the position on the board.
+    // Earlier moves are unknown, so the saved PGN starts from this position (SetUp/FEN tags).
+    let joined_midgame = !at_start && br.log.is_none();
+    if (at_start && (br.log.is_none() || !br.game.moves.is_empty() || br.our != our)) || joined_midgame {
+        let start = if at_start {
+            startpos
+        } else {
+            let to_move = if req.q("ourTurn") == Some("1") { our } else if our == WHITE { BLACK } else { WHITE };
+            let stm = if to_move == WHITE { "w" } else { "b" };
+            match Board::from_fen(&format!("{shown} {stm} - - 0 1")) {
+                Ok(b) => b,
+                Err(e) => return err(&format!("не понял позицию на доске: {e}")),
+            }
+        };
         bridge_save(app, &mut br);
         let me = format!("Magician ({})", style_name(style));
         let them = format!("Chess.com: {opponent}");
@@ -447,16 +460,18 @@ fn bridge_observe(app: &Arc<App>, req: &Request) -> String {
         br.game = Game::new(start);
         br.our = our;
         br.saved = None;
-        br.status = "новая партия".into();
+        br.status = if at_start { "новая партия" } else { "подключился к партии с текущей позиции" }.into();
     }
     if br.log.is_none() {
         br.status = "начните новую партию: Magician подключается с первого хода".into();
         return format!("{{\"ok\":true,\"move\":null,\"status\":{}}}", esc(&br.status));
     }
+    let mut applied = false;
     if placement(&br.game.board) != shown {
         let Some(path) = find_path(&br.game.board, shown) else {
             return format!("{{\"ok\":true,\"move\":null,\"status\":{}}}", esc("не понял позицию на доске, жду"));
         };
+        applied = true;
         for m in path {
             let note = br.pending.take().filter(|(pm, _)| *pm == m).map(|(_, n)| n);
             if let Some(log) = br.log.as_mut() {
@@ -473,6 +488,14 @@ fn bridge_observe(app: &Arc<App>, req: &Request) -> String {
             bridge_save(app, &mut br);
             br.status = format!("партия окончена: {result}");
             return format!("{{\"ok\":true,\"move\":null,\"status\":{},\"over\":true}}", esc(&br.status));
+        }
+    }
+    // A game joined mid-way starts with a guessed side to move. While the board has not changed and
+    // no move is pending, the page's "Your move" marker decides it, so a wrong guess does not stick.
+    // At the start position the rules already say that White moves first, so the page is not asked.
+    if !applied && !at_start && br.pending.is_none() {
+        if let Some(flag) = req.q("ourTurn") {
+            br.game.board.stm = if flag == "1" { our } else { 1 - our };
         }
     }
     if br.game.board.stm != our {

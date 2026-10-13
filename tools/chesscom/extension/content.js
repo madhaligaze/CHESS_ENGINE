@@ -1,26 +1,37 @@
 // Magician panel on Chess.com. Reads the board, asks the local Magician app for a move when it
 // is Magician's turn and plays it. Chess.com switches pages without reloading, so the script
 // follows the address. The panel is shown on the Play page (hub), on chess.com/play/computer
-// (bots) and chess.com/play/online (real players), playing on both. Leaving these pages stops
-// it, and on every other page the panel is hidden.
+// (bots), chess.com/play/online (real players) and chess.com/game/<id> (a started game), playing
+// on the game pages. Moving between the lobby and a game keeps Magician playing; leaving the game
+// area stops it, and on every other page the panel is hidden.
 (() => {
-  console.log('[Magician] Content script loaded, pathname:', location.pathname);
-  const S = { on: false, busy: false, lastBoard: '', lastAsk: 0, ended: false, style: 'Human' };
+  const HOST_ID = 'magician-chess-host';
+  // A copy left behind by a reloaded extension (or a double injection) must not stay on the page.
+  document.getElementById(HOST_ID)?.remove();
+  const alive = () => { try { return !!chrome.runtime?.id; } catch (e) { return false; } };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const S = { on: false, busy: false, lastBoard: '', lastAsk: 0, ended: false, style: 'Human' };
 
-  // 'bots': game against a computer bot, 'online': game against a real player, 'hub': the Play page, '': any other page.
+  // 'bots': game against a computer bot, 'online': game against a real player, 'game': a started game
+  // (Chess.com moves to /game/<id> once the game begins), 'hub': the Play page, '': any other page.
   function route() {
     const p = location.pathname.replace(/\/+$/, '');
-    return p.startsWith('/play/computer') ? 'bots' : p.startsWith('/play/online') ? 'online' : p === '/play' ? 'hub' : '';
+    return p.startsWith('/play/computer') ? 'bots' : p.startsWith('/play/online') ? 'online' :
+      p.startsWith('/game/') ? 'game' : p === '/play' ? 'hub' : '';
   }
+  const playable = (r) => r === 'bots' || r === 'online' || r === 'game';
 
   // ---------------------------------------------------------------- panel
+  // The panel lives in a shadow root so that Chess.com styles and re-renders cannot break it.
+  const host = document.createElement('div');
+  host.id = HOST_ID;
+  host.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:2147483647;display:none';
   const panel = document.createElement('div');
   panel.style.cssText =
-    'position:fixed;right:16px;bottom:16px;z-index:2147483647;width:270px;padding:12px 14px;border-radius:10px;' +
+    'width:270px;padding:12px 14px;border-radius:10px;box-sizing:border-box;' +
     'background:#262421;color:#eee;font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45)';
   panel.innerHTML = `
-    <div style="font-weight:700;font-size:15px;margin-bottom:8px">♞ Magician</div>
+    <div id="mg-title" style="font-weight:700;font-size:15px;margin-bottom:8px">♞ Magician</div>
     <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">Стиль
       <select id="mg-style" style="width:150px;padding:3px;border-radius:5px">
         <option value="Human">Сильный человек</option><option value="Tal">Таль</option>
@@ -28,13 +39,44 @@
       </select></label>
     <button id="mg-toggle" style="width:100%;padding:8px;border:0;border-radius:6px;background:#81b64c;color:#fff;font-weight:700;cursor:pointer">▶ Играть за меня</button>
     <div id="mg-status" style="margin-top:8px;color:#bbb;min-height:36px"></div>`;
-  panel.style.display = 'none';
-  document.body.appendChild(panel);
-  console.log('[Magician] Panel appended to DOM');
+  host.attachShadow({ mode: 'open' }).appendChild(panel);
+
+  // Keeps the panel attached: Chess.com may replace <body> children while it switches pages.
+  function mount() {
+    const root = document.body || document.documentElement;
+    if (root && host.parentNode !== root) root.appendChild(host);
+  }
+  mount();
   const $ = (id) => panel.querySelector(id);
   const setStatus = (t) => { $('#mg-status').textContent = t; };
   chrome.storage.local.get(['style'], (v) => { if (v.style) { S.style = v.style; $('#mg-style').value = v.style; } });
   $('#mg-style').addEventListener('change', (e) => { S.style = e.target.value; chrome.storage.local.set({ style: S.style }); });
+
+  // The title bar drags the panel, and the place is kept between visits. The panel stays on screen.
+  function place(x, y) {
+    const w = host.offsetWidth || 270, h = host.offsetHeight || 120;
+    host.style.left = Math.min(Math.max(0, x), window.innerWidth - w) + 'px';
+    host.style.top = Math.min(Math.max(0, y), window.innerHeight - h) + 'px';
+    host.style.right = 'auto';
+    host.style.bottom = 'auto';
+  }
+  chrome.storage.local.get(['pos'], (v) => { if (v.pos) place(v.pos.x, v.pos.y); });
+  const title = $('#mg-title');
+  title.style.cursor = 'move';
+  title.style.userSelect = 'none';
+  title.addEventListener('pointerdown', (e) => {
+    const r = host.getBoundingClientRect();
+    const dx = e.clientX - r.left, dy = e.clientY - r.top;
+    const move = (ev) => place(ev.clientX - dx, ev.clientY - dy);
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      const at = host.getBoundingClientRect();
+      chrome.storage.local.set({ pos: { x: at.left, y: at.top } });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
 
   function setOn(on) {
     S.on = on;
@@ -54,19 +96,23 @@
 
   $('#mg-toggle').addEventListener('click', () => {
     if (where === 'hub') openBots();
-    else if (where === 'bots' || where === 'online') setOn(!S.on);
+    else if (playable(where)) setOn(!S.on);
   });
 
   // Shows, hides and relabels the panel when the address changes.
   let where = null;
   function follow() {
-    if (!panel.isConnected) document.body.appendChild(panel);
+    mount();
     const now = route();
+    host.style.display = now ? '' : 'none';
     if (now === where) return;
+    const prev = where;
     where = now;
-    console.log('[Magician] Route changed to:', now, 'Display:', now ? 'visible' : 'hidden');
-    if (S.on) setOn(false);
-    panel.style.display = now ? '' : 'none';
+    // Moving from the lobby into a game keeps Magician playing; leaving the game area stops it.
+    if (S.on) {
+      if (playable(prev) && playable(now)) return;
+      setOn(false);
+    }
     if (now === 'hub') {
       $('#mg-toggle').textContent = '▶ Открыть Play Bots';
       setStatus('Magician играет только с ботами Chess.com. Откройте Play Bots, выберите бота и нажмите Play.');
@@ -76,6 +122,9 @@
     } else if (now === 'online') {
       $('#mg-toggle').textContent = '▶ Играть за меня';
       setStatus('Нажмите кнопку чтобы Magician собрал данные из партии.');
+    } else if (now === 'game') {
+      $('#mg-toggle').textContent = '▶ Играть за меня';
+      setStatus('Партия идёт. Нажмите кнопку, чтобы Magician играл за вас.');
     }
   }
 
@@ -130,14 +179,36 @@
     return flipped ? { w: t, b } : { w: b, b: t };
   }
 
+  // A game is on the board when the address is /game/<id> or the Abort/Resign buttons are shown.
+  // The lobby (/play/online before Start Game) shows the start position too, and it must not be
+  // taken for the start of a game: then Magician would wait for the opponent's first move.
+  function abortVisible() {
+    return [...document.querySelectorAll('button')].some((b) => /^(Abort|Resign|Прервать|Сдаться)$/i.test((b.innerText || '').trim()));
+  }
+  function inGame() {
+    return route() === 'game' || abortVisible();
+  }
+
+  // Chess.com shows "Your move ..." under our player while it is our turn. Only leaf elements count,
+  // and the chat and move list are skipped so that messages typed there cannot change the answer.
+  function ourTurn() {
+    return [...document.querySelectorAll('body *')].some((el) =>
+      el.children.length === 0 && /^(Your move|Ваш ход)\b/i.test((el.textContent || '').trim()) &&
+      !el.closest('[class*="chat"], [class*="move-list"], [class*="vertical-move"]'));
+  }
+
   function opponentName() {
     const el = document.querySelector('.player-component.player-top .cc-user-username-component, .player-top [data-cy="user-tagline-username"], .player-top .user-username-component');
     return el ? el.innerText.trim() : '';
   }
 
+  // Only a visible game-over box counts: Chess.com can leave one from an earlier game in the page,
+  // and reading it as the end of the current game would stop Magician at once.
   function gameOverText() {
-    const m = document.querySelector('.game-over-modal-content, .game-over-header-component, [class*="game-over-modal"]');
-    return m && m.innerText ? m.innerText.trim().replace(/\s+/g, ' ') : '';
+    for (const m of document.querySelectorAll('.game-over-modal-content, .game-over-header-component, [class*="game-over-modal"]')) {
+      if (m.getClientRects().length && m.innerText) return m.innerText.trim().replace(/\s+/g, ' ');
+    }
+    return '';
   }
 
   function resultFrom(text, ourWhite) {
@@ -170,11 +241,12 @@
 
   async function tick() {
     follow();
-    if (!S.on || S.busy || (where !== 'bots' && where !== 'online')) return;
+    if (!S.on || S.busy || !playable(where)) return;
+    if (!inGame()) return;
     const info = readBoard();
-    if (!info) { console.log('[Magician] Board not found'); return; }
     if (!info) return;
-    const over = gameOverText();
+    // While Abort/Resign is on the page the game is still going, whatever an old game-over box says.
+    const over = abortVisible() ? '' : gameOverText();
     if (over) {
       if (!S.ended) {
         S.ended = true;
@@ -193,17 +265,32 @@
       const c = clocks(info.flipped);
       const res = await api('/api/bridge/observe', {
         board: fen, flipped: info.flipped ? 1 : 0, style: S.style, opponent: opponentName(), wclock: c.w, bclock: c.b,
+        ourTurn: ourTurn() ? 1 : 0,
       });
       if (!res || !res.ok) { setStatus((res && res.message) || 'Приложение Magician не отвечает'); return; }
       setStatus(res.status || '');
-      if (res.move && S.on && (route() === 'bots' || route() === 'online')) await play(res.move, readBoard() || info);
+      if (res.move && S.on && playable(route())) await play(res.move, readBoard() || info);
     } finally {
       S.busy = false;
     }
   }
 
-  console.log('[Magician] Starting polling, initial route:', route());
+  // Chess.com changes the address without reloading, so the address is also watched on a timer and
+  // on history events. An orphaned copy (extension reloaded) removes itself.
+  const timers = [];
+  function stop() {
+    timers.forEach(clearInterval);
+    observer.disconnect();
+    host.remove();
+  }
+  const guarded = (fn) => () => {
+    if (!alive()) return stop();
+    try { const r = fn(); if (r && r.catch) r.catch((e) => console.warn('[Magician]', e)); } catch (e) { console.warn('[Magician]', e); }
+  };
+  const observer = new MutationObserver(guarded(follow));
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  for (const ev of ['popstate', 'hashchange', 'pageshow']) window.addEventListener(ev, guarded(follow));
+  timers.push(setInterval(guarded(tick), 250));
+  timers.push(setInterval(guarded(follow), 1000));
   follow();
-  setInterval(tick, 250);
-  setInterval(() => console.log('[Magician] Status:', { where, on: S.on, lastBoard: S.lastBoard.slice(0, 20) }), 5000);
 })();

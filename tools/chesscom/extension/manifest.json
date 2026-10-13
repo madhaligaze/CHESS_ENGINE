@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Magician Chess",
-  "version": "1.0",
+  "version": "1.2",
   "description": "Magician for Chess.com",
   "permissions": ["debugger", "storage"],
   "host_permissions": ["https://www.chess.com/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["https://www.chess.com/play/*"],
+      "matches": ["https://www.chess.com/*"],
+      "run_at": "document_idle",
       "js": ["content.js"]
     }
   ]
