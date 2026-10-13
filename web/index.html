@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Magician</title>
+<style>
+  :root {
+    --bg: #161512; --panel: #262421; --panel2: #302e2b; --text: #e8e6e3; --muted: #a09d98;
+    --light: #ebecd0; --dark: #739552; --accent: #81b64c; --danger: #c3423f;
+    --size: min(94vw, calc(100vh - 150px), 640px);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 12px 16px; }
+  header .logo { font-weight: 800; font-size: 20px; }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; }
+  nav button { background: var(--panel); color: var(--text); border: 0; border-radius: 6px; padding: 7px 12px; cursor: pointer; font: inherit; }
+  nav button.on { background: var(--accent); color: #fff; font-weight: 700; }
+  main { display: flex; flex-wrap: wrap; gap: 20px; padding: 0 16px 24px; }
+  #left { flex: 0 0 auto; width: var(--size); }
+  .player { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; gap: 8px; }
+  .player .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .clock { font: 600 22px Consolas, ui-monospace, monospace; background: #3c3a37; padding: 2px 10px; border-radius: 4px; min-width: 100px; text-align: right; }
+  .clock.run { background: #f5f5f5; color: #111; }
+  .clock.low { color: #e33; }
+  .board { width: var(--size); height: var(--size); display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); border-radius: 4px; overflow: hidden; user-select: none; touch-action: none; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); }
+  .sq { position: relative; min-width: 0; min-height: 0; }
+  .sq.l { background: var(--light); } .sq.d { background: var(--dark); }
+  .sq.last::before, .sq.sel::before { content: ''; position: absolute; inset: 0; background: rgba(255, 255, 51, .42); }
+  .sq.hover::after { content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .65); z-index: 4; }
+  .sq.check::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle, rgba(255, 0, 0, .9) 0%, rgba(255, 0, 0, 0) 72%); }
+  .sq .dot { position: absolute; left: 35%; top: 35%; width: 30%; height: 30%; border-radius: 50%; background: rgba(0, 0, 0, .18); z-index: 3; }
+  .sq .ring { position: absolute; inset: 3%; border-radius: 50%; border: calc(var(--size) / 100) solid rgba(0, 0, 0, .2); z-index: 3; }
+  .sq.mine { cursor: grab; }
+  .board { position: relative; }
+  .pieces { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+  .pieces .pc { position: absolute; left: 0; top: 0; width: 12.5%; height: 12.5%; background-size: 90%; background-repeat: no-repeat; background-position: center;
+    transition: transform .22s cubic-bezier(.22, .8, .3, 1), opacity .2s ease; will-change: transform; }
+  .pieces .pc.instant { transition: none; }
+  .pieces .pc.lifted { opacity: .3; }
+  .pieces .pc.gone { opacity: 0; }
+  .drag { position: fixed; z-index: 1000; pointer-events: none; width: calc(var(--size) / 8); height: calc(var(--size) / 8); transform: translate(-50%, -50%) scale(1.08); background-size: 90%; background-repeat: no-repeat; background-position: center; cursor: grabbing; }
+  .wK { background-image: url(/pieces/wK.svg); } .wQ { background-image: url(/pieces/wQ.svg); } .wR { background-image: url(/pieces/wR.svg); }
+  .wB { background-image: url(/pieces/wB.svg); } .wN { background-image: url(/pieces/wN.svg); } .wP { background-image: url(/pieces/wP.svg); }
+  .bK { background-image: url(/pieces/bK.svg); } .bQ { background-image: url(/pieces/bQ.svg); } .bR { background-image: url(/pieces/bR.svg); }
+  .bB { background-image: url(/pieces/bB.svg); } .bN { background-image: url(/pieces/bN.svg); } .bP { background-image: url(/pieces/bP.svg); }
+  .co { position: absolute; font-size: calc(var(--size) / 48); font-weight: 700; z-index: 1; pointer-events: none; }
+  .co.f { right: 4%; bottom: 2%; } .co.r { left: 4%; top: 2%; }
+  .sq.l .co { color: var(--dark); } .sq.d .co { color: var(--light); }
+  #promo { display: flex; gap: 6px; margin-top: 8px; }
+  #promo button { width: 64px; height: 64px; border-radius: 6px; border: 0; cursor: pointer; background-color: var(--light); background-size: 85%; background-repeat: no-repeat; background-position: center; }
+  footer { padding: 4px 16px 14px; color: #6f6c68; font-size: 11.5px; }
+  #right { flex: 1 1 340px; max-width: 560px; min-width: 0; }
+  .card { background: var(--panel); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 8px; font-size: 16px; }
+  label { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 7px 0; }
+  select { background: var(--panel2); color: var(--text); border: 1px solid #4a4744; border-radius: 5px; padding: 5px 6px; min-width: 190px; font: inherit; }
+  .btn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; font: inherit; font-weight: 700; cursor: pointer; margin: 6px 6px 0 0; }
+  .btn.gray { background: #4b4847; }
+  .btn.red { background: var(--danger); }
+  #moves { max-height: 240px; overflow: auto; font: 13px Consolas, ui-monospace, monospace; margin-top: 6px; }
+  .mrow { display: grid; grid-template-columns: 40px 1fr 1fr; padding: 1px 0; }
+  .mrow span:first-child { color: var(--muted); }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  #status { font-weight: 600; }
+  pre { white-space: pre-wrap; word-break: break-word; background: var(--panel2); padding: 8px; border-radius: 6px; font: 12px Consolas, ui-monospace, monospace; max-height: 260px; overflow: auto; }
+  .game-item { border-top: 1px solid #3a3835; padding: 8px 0; }
+  .game-item a { color: #9cc7ff; }
+  ol { padding-left: 20px; margin: 6px 0; } li { margin: 4px 0; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">♞ Magician</span>
+  <nav>
+    <button data-tab="play" class="on">Играть</button>
+    <button data-tab="watch">Смотреть</button>
+    <button data-tab="chesscom">Chess.com: боты</button>
+    <button data-tab="games">Партии и ошибки</button>
+  </nav>
+</header>
+<main>
+  <div id="left">
+    <div class="player"><span class="name" id="ntop">-</span><span class="clock" id="ctop">-:--</span></div>
+    <div class="board" id="board"></div>
+    <div class="player"><span class="name" id="nbot">-</span><span class="clock" id="cbot">-:--</span></div>
+    <div id="promo" class="hidden"></div>
+  </div>
+  <div id="right">
+    <section class="card" id="tab-play">
+      <h3>Играть с Magician</h3>
+      <label>Ваш цвет <select id="pcolor"><option value="white">Белые</option><option value="black">Чёрные</option><option value="random">Случайно</option></select></label>
+      <label>Соперник <select id="pstyle"></select></label>
+      <label>Контроль времени <select id="ptc"></select></label>
+      <button class="btn" id="pstart">Начать партию</button>
+      <button class="btn gray" id="presign">Сдаться</button>
+      <button class="btn gray" id="flip">Перевернуть доску</button>
+    </section>
+    <section class="card hidden" id="tab-watch">
+      <h3>Смотреть партию движков</h3>
+      <label>Белые <select id="wwhite"></select></label>
+      <label>Чёрные <select id="wblack"></select></label>
+      <label>Контроль времени <select id="wtc"></select></label>
+      <button class="btn" id="wstart">Начать</button>
+      <button class="btn gray" id="wstop">Остановить</button>
+      <div class="muted" id="sfnote"></div>
+    </section>
+    <section class="card hidden" id="tab-chesscom">
+      <h3>Chess.com: Magician играет с ботами Chess.com</h3>
+      <button class="btn" id="open-chesscom">Открыть Chess.com: игра с ботами</button>
+      <p class="muted">Magician встраивается в страницу Chess.com через расширение Edge. Установить его нужно один раз:</p>
+      <ol>
+        <li><button class="btn gray" id="open-ext">Открыть расширения Edge</button> и включите «Режим разработчика».</li>
+        <li>Нажмите «Загрузить распакованное» и выберите папку <code id="extdir">tools\chesscom\extension</code> <button class="btn gray" id="open-extfolder">Показать папку</button></li>
+        <li>Обновите вкладку Chess.com (F5).</li>
+      </ol>
+      <p class="muted">Дальше на Chess.com выберите бота, время и цвет, нажмите <b>Play</b>, а в панели Magician справа внизу выберите стиль и нажмите <b>«Играть за меня»</b>. Это приложение держите открытым: ходы считает оно. Работает только на странице игры с компьютером. Пока Magician ходит, Edge показывает плашку об отладке браузера: так расширение нажимает на доску.</p>
+      <p><b>Сейчас:</b> <span id="bstatus">-</span></p>
+      <div class="muted" id="blast"></div>
+      <div class="muted" id="bmoves"></div>
+      <div class="muted" id="bsaved"></div>
+    </section>
+    <section class="card hidden" id="tab-games">
+      <h3>Партии и ошибки</h3>
+      <div class="muted">Все партии записываются в <code id="gdir">games</code>. Разбор находит неточности, ошибки и зевки обеих сторон; ошибки Magician попадают в его память и в данные для дообучения.</div>
+      <button class="btn" id="analyze">Разобрать новые партии</button>
+      <button class="btn gray" id="greload">Обновить список</button>
+      <pre id="alog" class="hidden"></pre>
+      <div id="games"></div>
+    </section>
+    <section class="card">
+      <div id="status">Нет партии</div>
+      <div id="einfo" class="muted"></div>
+      <div id="moves"></div>
+    </section>
+  </div>
+</main>
+<footer>Фигуры: набор cburnett (Colin M.L. Burnett, CC BY-SA 3.0).</footer>
+<script>
+const $ = (s) => document.querySelector(s);
+const TCS = [['1+0', 60, 0], ['2+1', 120, 1], ['3+0', 180, 0], ['3+2', 180, 2], ['5+0', 300, 0], ['10+0', 600, 0], ['15+10', 900, 10], ['30+0', 1800, 0]];
+const MAGICIANS = [['magician:Human', 'Magician: сильный человек'], ['magician:Tal', 'Magician: Таль'], ['magician:Carlsen', 'Magician: Карлсен'], ['magician:Engine', 'Magician: чистый движок']];
+const STOCKFISH = [['stockfish:1800', 'Stockfish 19 (1800)'], ['stockfish:2200', 'Stockfish 19 (2200)'], ['stockfish:2600', 'Stockfish 19 (2600)'], ['stockfish:3000', 'Stockfish 19 (3000)']];
+const RESULTS = { '1-0': 'Победа белых', '0-1': 'Победа чёрных', '1/2-1/2': 'Ничья' };
+
+let st = null, fetchedAt = 0, sel = null, flip = false, userFlip = false, tab = 'play', lastGameId = 0;
+
+function fill(el, items, def) {
+  el.innerHTML = items.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  if (def) el.value = def;
+}
+fill($('#pstyle'), MAGICIANS, 'magician:Human');
+fill($('#ptc'), TCS.map(([n]) => [n, n]), '3+2');
+fill($('#wtc'), TCS.map(([n]) => [n, n]), '1+0');
+
+async function post(path, params = {}) {
+  const r = await fetch(path + '?' + new URLSearchParams(params), { method: 'POST' });
+  return r.json();
+}
+function tc(sel) { const t = TCS.find(([n]) => n === sel.value); return { base: t[1], inc: t[2] }; }
+
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
+  ['play', 'watch', 'chesscom', 'games'].forEach((t) => $('#tab-' + t).classList.toggle('hidden', t !== tab));
+  if (tab === 'games') loadGames();
+}));
+
+$('#pstart').onclick = async () => {
+  let color = $('#pcolor').value;
+  if (color === 'random') color = Math.random() < 0.5 ? 'white' : 'black';
+  const me = 'human', bot = $('#pstyle').value;
+  const r = await post('/api/new', { white: color === 'white' ? me : bot, black: color === 'white' ? bot : me, ...tc($('#ptc')) });
+  userFlip = false; flip = color === 'black'; sel = null;
+  if (!r.ok) alert(r.message);
+};
+$('#presign').onclick = () => post('/api/resign');
+$('#wstop').onclick = () => post('/api/resign');
+$('#flip').onclick = () => { userFlip = !userFlip; render(); };
+$('#wstart').onclick = async () => {
+  const r = await post('/api/new', { white: $('#wwhite').value, black: $('#wblack').value, ...tc($('#wtc')) });
+  userFlip = false; flip = false; sel = null;
+  if (!r.ok) alert(r.message);
+};
+$('#analyze').onclick = async () => { const r = await post('/api/analyze'); if (!r.ok) alert(r.message); $('#alog').classList.remove('hidden'); };
+$('#greload').onclick = () => loadGames();
+
+async function loadGames() {
+  const list = await (await fetch('/api/games')).json();
+  $('#games').innerHTML = list.length ? list.map((g) => `
+    <div class="game-item"><b>${esc(g.file)}</b> · <a href="/api/game?file=${encodeURIComponent(g.file)}" target="_blank">PGN</a>
+    ${g.report ? `<pre>${esc(g.report)}</pre>` : '<div class="muted">ещё не разобрана</div>'}</div>`).join('') : '<p class="muted">Партий пока нет.</p>';
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+function parseFen(fen) {
+  const rows = fen.split(' ')[0].split('/');
+  const b = new Array(64).fill('');
+  rows.forEach((row, i) => {
+    let f = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) f += Number(ch); else { b[(7 - i) * 8 + f] = ch; f++; }
+    }
+  });
+  return b;
+}
+const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const sqName = (i) => 'abcdefgh'[i % 8] + (Math.floor(i / 8) + 1);
+
+// ---------------------------------------------------------------- board
+// Squares are built once per orientation; pieces live in their own layer and slide between
+// squares (CSS transitions), so moves look smooth instead of the board being redrawn.
+const boardEl = $('#board');
+const piecesEl = document.createElement('div');
+piecesEl.className = 'pieces';
+let squares = [], orientation = null, pieces = {}, shownId = undefined;
+
+function buildSquares(flipped) {
+  boardEl.innerHTML = '';
+  squares = [];
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const rank = flipped ? row : 7 - row, file = flipped ? 7 - col : col;
+      const d = document.createElement('div');
+      d.className = 'sq ' + ((rank + file) % 2 ? 'l' : 'd');
+      d.dataset.sq = 'abcdefgh'[file] + (rank + 1);
+      if (col === 0) d.insertAdjacentHTML('beforeend', `<span class="co r">${rank + 1}</span>`);
+      if (row === 7) d.insertAdjacentHTML('beforeend', `<span class="co f">${'abcdefgh'[file]}</span>`);
+      boardEl.appendChild(d);
+      squares.push(d);
+    }
+  }
+  boardEl.appendChild(piecesEl);
+}
+function cellOf(name, flipped) {
+  const f = name.charCodeAt(0) - 97, r = Number(name[1]) - 1;
+  return flipped ? [7 - f, r] : [f, 7 - r];
+}
+function place(el, name, flipped, animate) {
+  const [c, r] = cellOf(name, flipped);
+  if (!animate) el.classList.add('instant');
+  el.style.transform = `translate(${c * 100}%, ${r * 100}%)`;
+  if (!animate) { void el.offsetWidth; el.classList.remove('instant'); }
+}
+const dist = (a, b) => Math.abs(a.charCodeAt(0) - b.charCodeAt(0)) + Math.abs(Number(a[1]) - Number(b[1]));
+function removePiece(pc) { pc.el.classList.add('gone'); setTimeout(() => pc.el.remove(), 250); }
+
+// Pieces that stay keep their element, moved pieces slide, captured ones fade out and new
+// ones (promotion, new game) appear.
+function setPosition(fen, flipped, animate) {
+  const target = {};
+  parseFen(fen).forEach((p, i) => { if (p) target[sqName(i)] = (p === p.toUpperCase() ? 'w' : 'b') + p.toUpperCase(); });
+  const next = {}, spare = [];
+  for (const [sq, pc] of Object.entries(pieces)) (target[sq] === pc.code ? (next[sq] = pc) : spare.push([sq, pc]));
+  for (const [sq, code] of Object.entries(target)) {
+    if (next[sq]) continue;
+    let best = -1;
+    spare.forEach(([osq, opc], i) => { if (opc.code === code && (best < 0 || dist(osq, sq) < dist(spare[best][0], sq))) best = i; });
+    if (best >= 0) {
+      const [, opc] = spare.splice(best, 1)[0];
+      place(opc.el, sq, flipped, animate);
+      next[sq] = opc;
+    } else {
+      const el = document.createElement('div');
+      el.className = 'pc ' + code;
+      piecesEl.appendChild(el);
+      place(el, sq, flipped, false);
+      next[sq] = { el, code };
+    }
+  }
+  spare.forEach(([, opc]) => removePiece(opc));
+  pieces = next;
+}
+
+function decorate(g) {
+  const last = g && g.moves.length ? g.moves[g.moves.length - 1].uci : null;
+  const legal = g ? g.legal : [];
+  const targets = sel ? legal.filter((m) => m.startsWith(sel)).map((m) => m.slice(2, 4)) : [];
+  for (const d of squares) {
+    const n = d.dataset.sq;
+    d.classList.toggle('last', !!last && (last.slice(0, 2) === n || last.slice(2, 4) === n));
+    d.classList.toggle('sel', sel === n);
+    d.classList.toggle('check', !!g && g.check === n);
+    d.classList.toggle('mine', legal.some((m) => m.startsWith(n)));
+    d.querySelectorAll('.dot, .ring').forEach((x) => x.remove());
+    if (targets.includes(n)) d.insertAdjacentHTML('beforeend', pieces[n] ? '<span class="ring"></span>' : '<span class="dot"></span>');
+  }
+}
+
+function render() {
+  const g = st && st.game;
+  const flipped = flip !== userFlip;
+  let animate = true;
+  if (orientation !== flipped) {
+    buildSquares(flipped);
+    orientation = flipped;
+    for (const [sq, pc] of Object.entries(pieces)) place(pc.el, sq, flipped, false);
+    animate = false;
+  }
+  const id = g ? g.id : null;
+  if (id !== shownId) { animate = false; shownId = id; }
+  setPosition(g ? g.fen : START, flipped, animate);
+  decorate(g);
+  const top = flipped ? 0 : 1, bot = flipped ? 1 : 0;
+  $('#ntop').textContent = g ? g.players[top].name : '-';
+  $('#nbot').textContent = g ? g.players[bot].name : '-';
+  if (g) {
+    let rows = '';
+    for (let i = 0; i < g.moves.length; i += 2) {
+      rows += `<div class="mrow"><span>${i / 2 + 1}.</span><span>${esc(g.moves[i].san)}</span><span>${g.moves[i + 1] ? esc(g.moves[i + 1].san) : ''}</span></div>`;
+    }
+    $('#moves').innerHTML = rows;
+    const engineMoves = g.moves.filter((m) => m.text);
+    $('#einfo').textContent = engineMoves.length ? engineMoves[engineMoves.length - 1].san + ': ' + engineMoves[engineMoves.length - 1].text : '';
+    let s;
+    if (g.result !== '*') s = `${RESULTS[g.result] || 'Партия окончена'}${g.termination ? ' (' + g.termination + ')' : ''}`;
+    else if (g.thinking) s = `${g.players[g.turn === 'w' ? 0 : 1].name} думает…`;
+    else if (g.legal.length) s = 'Ваш ход';
+    else s = 'Ход ' + (g.turn === 'w' ? 'белых' : 'чёрных');
+    if (g.saved) s += ' · сохранено: ' + g.saved.split(/[\\/]/).pop();
+    $('#status').textContent = s;
+  }
+  clocks();
+}
+
+function clockText(ms) {
+  ms = Math.max(0, ms);
+  if (ms < 20000) return (ms / 1000).toFixed(1);
+  const s = Math.floor(ms / 1000);
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function clocks() {
+  const g = st && st.game;
+  const flipped = flip !== userFlip;
+  for (const [el, side] of [['#ctop', flipped ? 0 : 1], ['#cbot', flipped ? 1 : 0]]) {
+    if (!g) { $(el).textContent = '-:--'; continue; }
+    const running = g.result === '*' && (g.turn === 'w' ? 0 : 1) === side;
+    const ms = g.clocks[side] - (running ? Date.now() - fetchedAt : 0);
+    $(el).textContent = clockText(ms);
+    $(el).classList.toggle('run', running);
+    $(el).classList.toggle('low', ms < 10000);
+  }
+}
+
+// Shows the player's own move at once (the server confirms it a moment later).
+function optimistic(from, to, animate) {
+  const pc = pieces[from];
+  if (!pc) return;
+  if (pieces[to]) removePiece(pieces[to]);
+  delete pieces[from];
+  pieces[to] = pc;
+  place(pc.el, to, orientation, animate);
+  // Castling: the rook goes along with the king.
+  if (pc.code[1] === 'K' && dist(from, to) === 2 && from[1] === to[1]) {
+    const kingside = to[0] === 'g';
+    const rf = (kingside ? 'h' : 'a') + from[1], rt = (kingside ? 'f' : 'd') + from[1];
+    if (pieces[rf]) { const rook = pieces[rf]; delete pieces[rf]; pieces[rt] = rook; place(rook.el, rt, orientation, true); }
+  }
+}
+function tryMove(from, to, animate) {
+  const g = st && st.game;
+  if (!g) return false;
+  const opts = g.legal.filter((m) => m.slice(0, 4) === from + to);
+  if (!opts.length) return false;
+  const play = (uci) => { optimistic(from, to, animate); sel = null; decorate(g); send(uci); };
+  if (opts.length > 1) {
+    const color = g.turn === 'w' ? 'w' : 'b';
+    $('#promo').innerHTML = ['q', 'r', 'b', 'n'].map((p) => `<button class="${color}${p.toUpperCase()}" data-p="${p}" title="превращение"></button>`).join('');
+    $('#promo').classList.remove('hidden');
+    $('#promo').querySelectorAll('button').forEach((b) => b.onclick = () => {
+      $('#promo').classList.add('hidden');
+      play(from + to + b.dataset.p);
+    });
+    return true;
+  }
+  play(opts[0]);
+  return true;
+}
+async function send(uci) {
+  const r = await post('/api/move', { uci });
+  if (!r.ok) console.warn(r.message);
+  poll();
+}
+// Moves: drag a piece, or click it and then click the target square.
+let drag = null;
+function squareAt(x, y) {
+  const r = boardEl.getBoundingClientRect();
+  if (x < r.left || y < r.top || x >= r.right || y >= r.bottom) return null;
+  const col = Math.floor((x - r.left) / (r.width / 8)), row = Math.floor((y - r.top) / (r.height / 8));
+  return squares[row * 8 + col] || null;
+}
+function clearHover() { document.querySelectorAll('.sq.hover').forEach((x) => x.classList.remove('hover')); }
+boardEl.addEventListener('pointerdown', (e) => {
+  const sqEl = squareAt(e.clientX, e.clientY); if (!sqEl) return;
+  const name = sqEl.dataset.sq;
+  if (sel && sel !== name && tryMove(sel, name, true)) return;
+  const g = st && st.game;
+  const movable = g && g.legal.some((m) => m.startsWith(name));
+  sel = movable ? name : null;
+  if (movable && pieces[name]) {
+    const ghost = document.createElement('div');
+    ghost.className = 'drag ' + pieces[name].code;
+    ghost.style.left = e.clientX + 'px';
+    ghost.style.top = e.clientY + 'px';
+    document.body.appendChild(ghost);
+    pieces[name].el.classList.add('lifted');
+    drag = { from: name, ghost };
+    boardEl.setPointerCapture(e.pointerId);
+  }
+  decorate(g);
+});
+boardEl.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  drag.ghost.style.left = e.clientX + 'px';
+  drag.ghost.style.top = e.clientY + 'px';
+  clearHover();
+  const sq = squareAt(e.clientX, e.clientY);
+  if (sq && sq.dataset.sq !== drag.from) sq.classList.add('hover');
+});
+boardEl.addEventListener('pointerup', (e) => {
+  if (!drag) return;
+  const d = drag;
+  drag = null;
+  d.ghost.remove();
+  clearHover();
+  if (pieces[d.from]) pieces[d.from].el.classList.remove('lifted');
+  const sq = squareAt(e.clientX, e.clientY);
+  if (sq && sq.dataset.sq !== d.from) tryMove(d.from, sq.dataset.sq, false);
+});
+
+async function poll() {
+  try {
+    const s = await (await fetch('/api/state')).json();
+    fetchedAt = Date.now();
+    const sig = JSON.stringify(s.game) + (s.game ? s.game.legal.join() : '');
+    const changed = !st || sig !== JSON.stringify(st.game) + (st.game ? st.game.legal.join() : '');
+    if (s.game && s.game.id !== lastGameId) {
+      lastGameId = s.game.id;
+      flip = s.game.players[1].kind === 'human' && s.game.players[0].kind !== 'human';
+    }
+    st = s;
+    if (changed) render(); else clocks();
+    // Chess.com bridge and analysis panels.
+    const b = s.bridge;
+    $('#bstatus').textContent = b.status;
+    $('#blast').textContent = b.last ? 'Последний ход Magician: ' + b.last : '';
+    $('#bmoves').textContent = b.moves.length ? 'Ходы: ' + b.moves.join(' ') : '';
+    $('#bsaved').textContent = b.saved ? 'Записано: ' + b.saved : '';
+    $('#extdir').textContent = s.extension_dir;
+    $('#gdir').textContent = s.data_dir + '\\games';
+    $('#sfnote').textContent = s.stockfish ? '' : 'Stockfish не найден: положите stockfish.exe в папку stockfish рядом с программой, чтобы играть против него.';
+    if (s.analysis.running || s.analysis.log.length) {
+      $('#alog').classList.remove('hidden');
+      $('#alog').textContent = s.analysis.log.join('\n') + (s.analysis.running ? '\n…' : '');
+    }
+    if (!fill.done) {
+      const all = MAGICIANS.concat(s.stockfish ? STOCKFISH : []);
+      fill($('#wwhite'), all, 'magician:Human');
+      fill($('#wblack'), all, s.stockfish ? 'stockfish:2600' : 'magician:Carlsen');
+      fill.done = true;
+    }
+  } catch (e) {
+    $('#status').textContent = 'Приложение Magician не отвечает: запустите его снова';
+  }
+}
+$('#open-chesscom').onclick = () => post('/api/open', { what: 'chesscom' });
+$('#open-ext').onclick = () => post('/api/open', { what: 'extensions' });
+$('#open-extfolder').onclick = () => post('/api/open', { what: 'extfolder' });
+setInterval(poll, 150);
+setInterval(clocks, 100);
+poll();
+</script>
+</body>
+</html>

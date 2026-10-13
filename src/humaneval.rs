@@ -83,7 +83,8 @@ pub fn run(cfg: &HumanEvalConfig) -> std::io::Result<()> {
         for (ply, san) in g.moves.iter().enumerate() {
             let Some(m) = parse_san(&game.board, san) else { continue 'games };
             if colors[game.board.stm] && ply >= cfg.min_ply && next_f64(&mut rng) < cfg.sample {
-                let (chosen, result) = think(&mut searcher, &game, &cfg.limits, &cfg.opts, net.as_deref(), rng);
+                let th = think(&mut searcher, &game, &cfg.limits, &cfg.opts, net.as_deref(), rng, &[]);
+                let (chosen, result) = (th.mv, th.result);
                 st.n += 1;
                 let best = result.root_moves.first().map_or(result.best, |r| r.mv);
                 st.engine += (best == m) as usize;

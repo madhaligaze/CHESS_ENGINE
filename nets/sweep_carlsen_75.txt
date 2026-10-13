@@ -1,6 +1,0 @@
-style Carlsen, network carlsen, humanity 75, variety 0, max loss 60
-positions: 600
-network top-1 matches human: 43.2%  (top-3: 71.7%)
-pure engine best matches human: 48.7%
-engine in this mode matches human: 54.3%
-chosen differs from engine best in 38.7% of moves; average cost 6.0 cp

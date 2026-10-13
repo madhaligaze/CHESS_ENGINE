@@ -4,13 +4,17 @@
 //! decision is made together with a neural network trained to predict the moves of strong
 //! human players. See README.md for the design.
 
+pub mod analyze;
+pub mod app;
 pub mod bitboard;
 pub mod board;
 pub mod datagen;
 pub mod engine;
 pub mod eval;
 pub mod features;
+pub mod gamelog;
 pub mod humaneval;
+pub mod learn;
 pub mod movegen;
 pub mod nn;
 pub mod perft;
@@ -20,4 +24,5 @@ pub mod search;
 pub mod tt;
 pub mod types;
 pub mod uci;
+pub mod ucicl;
 pub mod zobrist;

@@ -7,7 +7,13 @@ use std::time::Instant;
 
 const USAGE: &str = "usage:
   magician                              UCI mode (default)
+  magician play [--port N] [--no-browser]
+                                        the Magician app: board in the browser, games vs
+                                        Magician / Stockfish, Chess.com bots, game analysis
   magician bench [depth]                fixed-depth search of standard positions
+  magician analyze [--movetime MS] [--threads N] [--no-learn] [GAMES.pgn...]
+                                        grade every move of saved games (default: new games
+                                        in games/), remember the engine's mistakes
   magician perft <depth> [fen]
   magician perftsuite [maxdepth]
   magician datagen --out FILE [--style N] [--min-elo N] [--player NAME] [--sample P]
@@ -17,6 +23,55 @@ const USAGE: &str = "usage:
                    [--nodes N | --depth N | --movetime MS] [--style human|tal|carlsen|engine]
                    [--humanity N] [--variety N] [--max-loss CP] [--net-dir DIR]
                    [--eval-style human|tal|carlsen|engine] FILE.pgn";
+
+fn run_analyze(args: &[String]) {
+    use magician::analyze::{run, AnalyzeConfig};
+    let mut cfg = AnalyzeConfig {
+        inputs: Vec::new(),
+        movetime_ms: 400,
+        threads: std::thread::available_parallelism().map_or(1, |n| n.get()).min(4),
+        data_dir: magician::engine::data_dir(),
+        learn: true,
+    };
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--movetime" => {
+                i += 1;
+                cfg.movetime_ms = args.get(i).and_then(|v| v.parse().ok()).expect("--movetime MS");
+            }
+            "--threads" => {
+                i += 1;
+                cfg.threads = args.get(i).and_then(|v| v.parse().ok()).expect("--threads N");
+            }
+            "--no-learn" => cfg.learn = false,
+            s if s.starts_with("--") => panic!("unknown option {s}\n{USAGE}"),
+            s => cfg.inputs.push(s.into()),
+        }
+        i += 1;
+    }
+    if cfg.inputs.is_empty() {
+        // Default: every game in the games folder that has not been analysed yet.
+        let games = cfg.data_dir.join("games");
+        if let Ok(rd) = std::fs::read_dir(&games) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let done = games.join("analysis").join(p.file_name().unwrap_or_default()).exists();
+                if p.extension().is_some_and(|x| x == "pgn") && !done {
+                    cfg.inputs.push(p);
+                }
+            }
+        }
+        if cfg.inputs.is_empty() {
+            println!("no new games in {}", games.display());
+            return;
+        }
+    }
+    if let Err(e) = run(&cfg) {
+        eprintln!("analyze failed: {e}");
+        std::process::exit(1);
+    }
+}
 
 fn run_humaneval(args: &[String]) {
     use magician::engine::{Options, StyleKind};
@@ -83,6 +138,14 @@ fn main() {
             }
             uci.run();
         }
+        Some("play") => {
+            let port = args.iter().position(|a| a == "--port").and_then(|i| args.get(i + 1)).and_then(|p| p.parse().ok()).unwrap_or(8765);
+            let open = !args.iter().any(|a| a == "--no-browser");
+            if let Err(e) = magician::app::run(port, open) {
+                eprintln!("не удалось запустить приложение: {e}");
+                std::process::exit(1);
+            }
+        }
         Some("bench") => {
             let depth = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(11);
             std::thread::Builder::new().stack_size(SEARCH_STACK).spawn(move || bench(depth)).unwrap().join().unwrap();
@@ -93,6 +156,15 @@ fn main() {
         }
         Some("perftsuite") => run_perft_suite(args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5)),
         Some("datagen") => run_datagen(&args[1..]),
+        Some("analyze") => {
+            let rest = args[1..].to_vec();
+            std::thread::Builder::new()
+                .stack_size(SEARCH_STACK)
+                .spawn(move || run_analyze(&rest))
+                .unwrap()
+                .join()
+                .unwrap();
+        }
         Some("humaneval") => {
             let rest = args[1..].to_vec();
             std::thread::Builder::new()
@@ -125,6 +197,7 @@ fn bench(depth: i32) {
     for fen in BENCH_FENS {
         let b = Board::from_fen(fen).unwrap();
         s.clear();
+        s.shared_nodes.store(0, std::sync::atomic::Ordering::Relaxed);
         let r = s.search(&b, &[b.hash], &SearchParams { depth: Some(depth), ..Default::default() });
         println!("{:>10} nodes  d{} {:>8} {:<6} {fen}", r.nodes, r.depth, magician::search::uci_score(r.score), r.best.to_uci());
         nodes += r.nodes;

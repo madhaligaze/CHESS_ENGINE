@@ -13,7 +13,15 @@ __pycache__/
 /nets/*.out
 /nets/test.*
 /nets/humaneval/
+/nets/logs/
+/nets/matches/
 /training/.venv-dml/
 .claude/
 CLAUDE.md
 CLAUDE.local.md
+/games/
+/learn.txt
+/dist/
+/tools/chesscom/.test-profile/
+/tools/chesscom/test-screens/
+/app/

@@ -1,17 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Magician: игра с ботами Chess.com",
-  "version": "0.3",
-  "description": "Шахматный движок Magician играет с компьютерными ботами Chess.com в вашем окне. Панель видна на странице Play и в игре с компьютером, играет только с ботами.",
-  "permissions": ["debugger", "storage", "scripting"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "https://www.chess.com/*"],
+  "name": "Magician Chess",
+  "version": "1.0",
+  "description": "Magician for Chess.com",
+  "permissions": ["debugger", "storage"],
+  "host_permissions": ["https://www.chess.com/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["https://www.chess.com/*"],
-      "js": ["content.js"],
-      "run_at": "document_start",
-      "all_frames": false
+      "matches": ["https://www.chess.com/play/*"],
+      "js": ["content.js"]
     }
   ]
 }

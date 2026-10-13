@@ -1,7 +1,8 @@
 //! Turns a search into a move the way a strong human would choose it.
 //!
 //! 1. The network predicts which moves a strong human (or Tal, or Carlsen) would consider.
-//! 2. The alpha-beta search scores those candidates exactly, alongside its own best move.
+//! 2. The alpha-beta search finds the engine's own best move; then the human candidates
+//!    that could still win the choice get exact scores.
 //! 3. The move is chosen by KL-regularised selection (the "piKL" rule from human-AI
 //!    research): maximise  expected_score(eval) + beta * ln(human probability).
 //!    Among moves that are about equally good the human one wins; a clearly better engine
@@ -93,7 +94,7 @@ impl Default for Options {
             hash_mb: 64,
             threads: 1,
             style: StyleKind::Human,
-            humanity: 50,
+            humanity: 25,
             variety: 20,
             max_loss: 60,
             human_timing: true,
@@ -144,24 +145,27 @@ pub struct Nets {
 }
 
 impl Nets {
-    /// Looks for nets/ next to the executable, two levels up (cargo target dir) and in the
-    /// working directory, unless a directory is given.
-    pub fn load(dir: Option<&Path>) -> Nets {
-        let candidates: Vec<PathBuf> = match dir {
-            Some(d) => vec![d.to_path_buf()],
-            None => {
-                let mut v = Vec::new();
-                if let Ok(exe) = std::env::current_exe() {
-                    if let Some(d) = exe.parent() {
-                        v.push(d.join("nets"));
-                        v.push(d.join("../../nets"));
-                    }
-                }
-                v.push(PathBuf::from("nets"));
-                v
+    /// nets/ next to the executable, two levels up (cargo target dir) or in the working
+    /// directory: the first one that contains base.nn.
+    pub fn find_dir() -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(d) = exe.parent() {
+                candidates.push(d.join("nets"));
+                candidates.push(d.join("../../nets"));
             }
+        }
+        candidates.push(PathBuf::from("nets"));
+        candidates.into_iter().find(|d| d.join("base.nn").exists()).map(|d| normalize(&d))
+    }
+
+    /// Loads the networks from `dir`, or from `find_dir()` when none is given.
+    pub fn load(dir: Option<&Path>) -> Nets {
+        let found = match dir {
+            Some(d) => Some(d.to_path_buf()).filter(|d| d.join("base.nn").exists()),
+            None => Self::find_dir(),
         };
-        let Some(dir) = candidates.into_iter().find(|d| d.join("base.nn").exists()) else {
+        let Some(dir) = found else {
             return Nets::default();
         };
         let load = |name: &str| match Network::load(&dir.join(name)) {
@@ -184,6 +188,47 @@ impl Nets {
             StyleKind::Human => self.base.clone(),
         }
     }
+}
+
+/// Resolves "." and ".." lexically (canonicalize would produce \\?\ paths on Windows).
+fn normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Where the engine keeps its own files (games/, learn.txt): $MAGICIAN_HOME, else the
+/// `home=` line of magician.ini next to the executable (written by the installer), else the
+/// folder that holds nets/ (the project or the installation folder), else the exe's folder.
+pub fn data_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("MAGICIAN_HOME") {
+        return PathBuf::from(home);
+    }
+    let ini = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("magician.ini")));
+    if let Some(text) = ini.and_then(|p| std::fs::read_to_string(p).ok()) {
+        if let Some(home) = text.lines().find_map(|l| l.trim().trim_start_matches('\u{feff}').strip_prefix("home=")) {
+            let home = PathBuf::from(home.trim());
+            if home.is_dir() {
+                return home;
+            }
+        }
+    }
+    if let Some(root) = Nets::find_dir().and_then(|d| d.parent().map(Path::to_path_buf)) {
+        return root;
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Soft (stop starting iterations) and hard (abort) time limits in milliseconds.
@@ -368,8 +413,30 @@ pub fn choose(result: &SearchResult, opts: &Options, rng: &mut u64) -> Decision 
     Decision { mv: chosen.mv, explanation }
 }
 
-/// Full move decision for `game`: network, search, human choice. Prints UCI info lines.
-pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options, net: Option<&Network>, seed: u64) -> (Move, SearchResult) {
+/// What the engine decided and why.
+pub struct Thought {
+    pub mv: Move,
+    pub result: SearchResult,
+    /// Network move probabilities in this position (empty without a network).
+    pub policy: Vec<(Move, f32)>,
+    /// Why this move was chosen (empty for the pure engine).
+    pub explanation: String,
+}
+
+impl Thought {
+    /// Score of the move actually played (falls back to the best score).
+    pub fn played_score(&self) -> i32 {
+        self.result.root_moves.iter().find(|r| r.mv == self.mv && r.exact).map_or(self.result.score, |r| r.score)
+    }
+
+    pub fn played_prior(&self) -> f32 {
+        self.policy.iter().find(|(m, _)| *m == self.mv).map_or(0.0, |(_, p)| *p)
+    }
+}
+
+/// Full move decision for `game`: network, search, human choice. Prints UCI info lines
+/// unless `opts.quiet`. Moves in `avoid` are not played if anything else is legal.
+pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options, net: Option<&Network>, seed: u64, avoid: &[Move]) -> Thought {
     let style = opts.style;
     pool.main.eval_params.style = opts.eval_style.unwrap_or(style).eval_style();
     let (h_pct, l_pct) = style.choice_scale();
@@ -389,6 +456,7 @@ pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options
         soft_ms: soft,
         hard_ms: hard,
         verbose: !opts.quiet,
+        excluded: avoid.to_vec(),
         ..Default::default()
     };
     if let Some(ne) = &net_eval {
@@ -420,18 +488,18 @@ pub fn think(pool: &mut SearchPool, game: &Game, limits: &Limits, opts: &Options
     }
 
     let mut result = pool.search(&game.board, &game.hashes, &params);
-    let mv = if let (true, Some(ne)) = (human, &net_eval) {
+    let (mv, explanation) = if let (true, Some(ne)) = (human, &net_eval) {
         verify_human_candidates(pool, game, &mut result, ne, opts);
         let mut rng = seed | 1;
         let d = choose(&result, opts, &mut rng);
         if !d.explanation.is_empty() && !opts.quiet {
             println!("info string {}", d.explanation);
         }
-        d.mv
+        (d.mv, d.explanation)
     } else {
-        result.best
+        (result.best, String::new())
     };
-    (mv, result)
+    Thought { mv, result, policy: net_eval.map(|e| e.policy).unwrap_or_default(), explanation }
 }
 
 #[cfg(test)]

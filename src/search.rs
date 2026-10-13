@@ -78,6 +78,8 @@ pub struct SearchParams {
     pub hard_ms: Option<u64>,
     /// Network move probabilities for the root moves (used for move ordering and reporting).
     pub priors: Vec<(Move, f32)>,
+    /// Root moves not to play (known mistakes), unless nothing else is legal.
+    pub excluded: Vec<Move>,
     pub verbose: bool,
     /// First iteration depth (helper threads start at different depths).
     pub start_depth: i32,
@@ -758,9 +760,12 @@ impl Searcher {
         let mut legal = MoveList::new();
         generate_legal(root, &mut legal);
         let prior_of = |m: Move| p.priors.iter().find(|(pm, _)| *pm == m).map_or(0.0, |(_, pr)| *pr);
+        let allowed = |m: &Move| !p.excluded.contains(m);
+        let keep_all = !legal.as_slice().iter().any(allowed);
         self.root_moves = legal
             .as_slice()
             .iter()
+            .filter(|m| keep_all || allowed(m))
             .map(|&m| RootMove {
                 mv: m,
                 score: -INF,

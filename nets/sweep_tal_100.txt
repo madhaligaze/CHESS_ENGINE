@@ -1,6 +1,0 @@
-style Tal, network tal, humanity 100, variety 0, max loss 60
-positions: 577
-network top-1 matches human: 48.9%  (top-3: 74.7%)
-pure engine best matches human: 52.0%
-engine in this mode matches human: 58.8%
-chosen differs from engine best in 33.8% of moves; average cost 6.5 cp

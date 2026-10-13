@@ -2,8 +2,10 @@
 //! answered while thinking.
 
 use crate::board::Board;
-use crate::engine::{think, Game, Nets, Options, StyleKind};
+use crate::engine::{data_dir, think, Game, Nets, Options, StyleKind};
 use crate::eval::{evaluate_full, Breakdown, EvalParams};
+use crate::gamelog::{EngineNote, Recorder};
+use crate::learn::Learn;
 use crate::search::{Limits, SearchPool, SEARCH_STACK};
 use crate::types::*;
 use std::io::BufRead;
@@ -20,6 +22,15 @@ fn max_threads() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get()).max(1)
 }
 
+pub fn style_name(s: StyleKind) -> &'static str {
+    match s {
+        StyleKind::Human => "Human",
+        StyleKind::Tal => "Tal",
+        StyleKind::Carlsen => "Carlsen",
+        StyleKind::Engine => "Engine",
+    }
+}
+
 pub struct Uci {
     game: Game,
     opts: Options,
@@ -27,6 +38,9 @@ pub struct Uci {
     searcher: Arc<Mutex<SearchPool>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    recorder: Arc<Mutex<Recorder>>,
+    learn: Arc<Learn>,
+    data_dir: PathBuf,
 }
 
 impl Default for Uci {
@@ -39,6 +53,7 @@ impl Uci {
     pub fn new() -> Uci {
         let opts = Options::default();
         let stop = Arc::new(AtomicBool::new(false));
+        let dir = data_dir();
         Uci {
             game: Game::new(Board::startpos()),
             nets: Nets::load(None),
@@ -46,6 +61,9 @@ impl Uci {
             opts,
             stop,
             worker: None,
+            recorder: Arc::new(Mutex::new(Recorder::new(dir.clone()))),
+            learn: Arc::new(Learn::load(&dir.join("learn.txt"))),
+            data_dir: dir,
         }
     }
 
@@ -65,6 +83,7 @@ impl Uci {
         }
         self.stop.store(true, Ordering::Relaxed);
         self.wait();
+        self.recorder.lock().unwrap().flush();
     }
 
     /// Handles one command; returns false on `quit`.
@@ -78,6 +97,8 @@ impl Uci {
                 self.wait();
                 self.searcher.lock().unwrap().clear();
                 self.game = Game::new(Board::startpos());
+                self.recorder.lock().unwrap().flush();
+                self.learn = Arc::new(Learn::load(&self.data_dir.join("learn.txt")));
             }
             "setoption" => {
                 self.wait();
@@ -110,12 +131,14 @@ impl Uci {
         println!("option name Hash type spin default 64 min 1 max 8192");
         println!("option name Threads type spin default 1 min 1 max {}", max_threads());
         println!("option name Style type combo default Human var Human var Tal var Carlsen var Engine");
-        println!("option name Humanity type spin default 50 min 0 max 100");
+        println!("option name Humanity type spin default 25 min 0 max 100");
         println!("option name Variety type spin default 20 min 0 max 100");
         println!("option name MaxLoss type spin default 60 min 0 max 1000");
         println!("option name HumanTiming type check default true");
         println!("option name Move Overhead type spin default 30 min 0 max 5000");
         println!("option name NetDir type string default <auto>");
+        println!("option name GameLog type check default true");
+        println!("option name UCI_Opponent type string default <empty>");
         println!("option name Clear Hash type button");
         match &self.nets.dir {
             Some(d) => println!(
@@ -151,7 +174,7 @@ impl Uci {
                 Some(s) => self.opts.style = s,
                 None => println!("info string unknown style '{value}'"),
             },
-            "humanity" => self.opts.humanity = num(&value).unwrap_or(50).clamp(0, 100) as u32,
+            "humanity" => self.opts.humanity = num(&value).unwrap_or(25).clamp(0, 100) as u32,
             "variety" => self.opts.variety = num(&value).unwrap_or(20).clamp(0, 100) as u32,
             "maxloss" => self.opts.max_loss = num(&value).unwrap_or(60).clamp(0, 1000) as i32,
             "humantiming" => self.opts.human_timing = value.eq_ignore_ascii_case("true"),
@@ -163,6 +186,17 @@ impl Uci {
                 println!("info string networks loaded: base {}", self.nets.base.is_some());
             }
             "clear hash" => self.searcher.lock().unwrap().clear(),
+            "gamelog" => self.recorder.lock().unwrap().enabled = value.eq_ignore_ascii_case("true"),
+            "uci_opponent" => {
+                // "<title> <rating> <computer|human> <name>"
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                let mut rec = self.recorder.lock().unwrap();
+                if parts.len() >= 4 {
+                    let title = if parts[0].eq_ignore_ascii_case("none") { String::new() } else { format!("{} ", parts[0]) };
+                    rec.opponent_name = Some(format!("{title}{} ({})", parts[3..].join(" "), parts[1]));
+                    rec.opponent_type = Some(if parts[2].eq_ignore_ascii_case("human") { "human" } else { "engine" }.into());
+                }
+            }
             _ => println!("info string unknown option '{name}'"),
         }
     }
@@ -174,13 +208,14 @@ impl Uci {
             Some(&"fen") => Board::from_fen(&t[1..mi.unwrap_or(t.len())].join(" "))?,
             _ => return Err("position: expected startpos or fen".into()),
         };
-        let mut game = Game::new(board);
+        let mut game = Game::new(board.clone());
         if let Some(i) = mi {
             for s in &t[i + 1..] {
                 let m = crate::san::parse_uci(&game.board, s).ok_or(format!("illegal move {s}"))?;
                 game.play(m);
             }
         }
+        self.recorder.lock().unwrap().sync(&board, &game.moves);
         self.game = game;
         Ok(())
     }
@@ -210,12 +245,29 @@ impl Uci {
         let opts = self.opts.clone();
         let net = self.nets.for_style(opts.style);
         let seed = SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64);
+        let engine_name = format!("Magician ({})", style_name(opts.style));
+        self.recorder.lock().unwrap().go(&engine_name, limits.time, limits.inc);
+        let recorder = self.recorder.clone();
+        let avoid = self.learn.avoid(&game.board);
         let handle = std::thread::Builder::new()
             .stack_size(SEARCH_STACK)
             .spawn(move || {
                 let mut s = searcher.lock().unwrap();
-                let (mv, _) = think(&mut s, &game, &limits, &opts, net.as_deref(), seed);
-                println!("bestmove {}", mv.to_uci());
+                let th = think(&mut s, &game, &limits, &opts, net.as_deref(), seed, &avoid);
+                println!("bestmove {}", th.mv.to_uci());
+                let stm = game.board.stm;
+                let r = &th.result;
+                let note = EngineNote {
+                    score: Some(th.played_score()),
+                    depth: r.depth,
+                    nodes: r.nodes,
+                    time_ms: r.time_ms,
+                    best: r.root_moves.first().map_or(th.mv, |m| m.mv),
+                    best_score: r.root_moves.first().map(|m| m.score),
+                    human_prob: (!th.policy.is_empty()).then(|| th.played_prior()),
+                };
+                let clock = limits.time[stm].map(|t| t.saturating_sub(r.time_ms) + limits.inc[stm].unwrap_or(0));
+                recorder.lock().unwrap().engine_move(th.mv, clock, note);
             })
             .expect("spawn search thread");
         self.worker = Some(handle);
