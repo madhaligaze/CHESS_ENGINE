@@ -1,7 +1,7 @@
 // Magician panel on Chess.com. Reads the board, asks the local Magician app for a move when it
-// is Magician's turn and plays it. Bots only: Chess.com switches pages without reloading, so
-// the script follows the address. The panel is shown on the Play page (where it leads to the
-// bots) and on chess.com/play/computer, the only page where it plays. Leaving that page stops
+// is Magician's turn and plays it. Chess.com switches pages without reloading, so the script
+// follows the address. The panel is shown on the Play page (hub), on chess.com/play/computer
+// (bots) and chess.com/play/online (real players), playing on both. Leaving these pages stops
 // it, and on every other page the panel is hidden.
 (() => {
   const S = { on: false, busy: false, lastBoard: '', lastAsk: 0, ended: false, style: 'Human' };
@@ -52,7 +52,7 @@
 
   $('#mg-toggle').addEventListener('click', () => {
     if (where === 'hub') openBots();
-    else if (where === 'bots') setOn(!S.on);
+    else if (where === 'bots' || where === 'online') setOn(!S.on);
   });
 
   // Shows, hides and relabels the panel when the address changes.
