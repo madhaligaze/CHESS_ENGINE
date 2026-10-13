@@ -4,6 +4,7 @@
 // (bots) and chess.com/play/online (real players), playing on both. Leaving these pages stops
 // it, and on every other page the panel is hidden.
 (() => {
+  console.log('[Magician] Content script loaded, pathname:', location.pathname);
   const S = { on: false, busy: false, lastBoard: '', lastAsk: 0, ended: false, style: 'Human' };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -29,6 +30,7 @@
     <div id="mg-status" style="margin-top:8px;color:#bbb;min-height:36px"></div>`;
   panel.style.display = 'none';
   document.body.appendChild(panel);
+  console.log('[Magician] Panel appended to DOM');
   const $ = (id) => panel.querySelector(id);
   const setStatus = (t) => { $('#mg-status').textContent = t; };
   chrome.storage.local.get(['style'], (v) => { if (v.style) { S.style = v.style; $('#mg-style').value = v.style; } });
@@ -62,6 +64,7 @@
     const now = route();
     if (now === where) return;
     where = now;
+    console.log('[Magician] Route changed to:', now, 'Display:', now ? 'visible' : 'hidden');
     if (S.on) setOn(false);
     panel.style.display = now ? '' : 'none';
     if (now === 'hub') {
@@ -169,6 +172,7 @@
     follow();
     if (!S.on || S.busy || (where !== 'bots' && where !== 'online')) return;
     const info = readBoard();
+    if (!info) { console.log('[Magician] Board not found'); return; }
     if (!info) return;
     const over = gameOverText();
     if (over) {
@@ -198,6 +202,8 @@
     }
   }
 
+  console.log('[Magician] Starting polling, initial route:', route());
   follow();
   setInterval(tick, 250);
+  setInterval(() => console.log('[Magician] Status:', { where, on: S.on, lastBoard: S.lastBoard.slice(0, 20) }), 5000);
 })();
